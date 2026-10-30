@@ -1,0 +1,45 @@
+# MIVAIS Studio on the Oracle Cloud VM (Always Free, Ampere A1, arm64): Studio, its MongoDB
+# and the Cloudflare Tunnel that publishes it as https://studio.thanosdrossos.com. Nothing
+# listens on a public port; the tunnel connects outward. deploy.sh builds and starts it.
+# Secrets live on the VM only: /opt/mivais/studio.env (STUDIO_ADMIN_PASSWORD,
+# STUDIO_JWT_SECRET, STUDIO_PUBLIC_BASE_URL) and /opt/mivais/tunnel.env (TUNNEL_TOKEN).
+
+name: mivais
+
+services:
+  mongo:
+    image: mongo:7.0.43
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+
+  studio:
+    build:
+      context: ../..
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    env_file: /opt/mivais/studio.env
+    environment:
+      STUDIO_MONGO_URL: mongodb://mongo:27017
+      STUDIO_ENVIRONMENT: production
+      STUDIO_WHISPER_WORKER_ENABLED: "false"
+    volumes:
+      - studio-data:/app/data
+      - studio-studies:/app/studies
+    # For checks over SSH (curl localhost:8000/health); the tunnel reaches it as studio:8000.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: /opt/mivais/tunnel.env
+    depends_on:
+      - studio
+
+volumes:
+  mongo-data:
+  studio-data:
+  studio-studies:

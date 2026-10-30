@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy MIVAIS Studio from the fork's deploy/oracle branch
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mivais/MIVAIS/studio/deploy/oracle/deploy.sh
+# A build on the A1 VM takes a few minutes.
+TimeoutStartSec=30min
