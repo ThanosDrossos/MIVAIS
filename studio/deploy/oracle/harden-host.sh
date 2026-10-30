@@ -74,15 +74,23 @@ Unattended-Upgrade::Automatic-Reboot-Time "02:30";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 EOF
 
-# IPv6 has no address on this VCN; if one is added later, only SSH and ICMPv6 come in, as on
-# IPv4 (Oracle's image already rejects all but SSH there).
+# SSH comes only through the Cloudflare Tunnel, behind Cloudflare Access: cloudflared reaches
+# sshd from its Docker network (172.16.0.0/12). Port 22 is closed to the internet. Without the
+# tunnel, a commit to deploy/oracle still reaches the VM, and Oracle's Run Command works.
+OPEN_SSH=(-p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT)
+TUNNEL_SSH=(-s 172.16.0.0/12 "${OPEN_SSH[@]}")
+iptables -C INPUT "${TUNNEL_SSH[@]}" 2>/dev/null || iptables -I INPUT 1 "${TUNNEL_SSH[@]}"
+iptables -D INPUT "${OPEN_SSH[@]}" 2>/dev/null || true
+sed -i 's|^-A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT$|-A INPUT -s 172.16.0.0/12 -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT|' /etc/iptables/rules.v4
+
+# IPv6 has no address on this VCN; if one is added later, only ICMPv6 comes in.
 ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || {
   ip6tables -A INPUT -i lo -j ACCEPT
   ip6tables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
   ip6tables -A INPUT -p ipv6-icmp -j ACCEPT
-  ip6tables -A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT
   ip6tables -A INPUT -j REJECT --reject-with icmp6-adm-prohibited
 }
+ip6tables -D INPUT "${OPEN_SSH[@]}" 2>/dev/null || true
 # Only the IPv6 rules are saved; the IPv4 file also holds Docker's chains, which Docker writes itself.
 ip6tables-save >/etc/iptables/rules.v6
 
