@@ -22,7 +22,11 @@ AuthenticationMethods publickey
 PermitEmptyPasswords no
 AllowUsers ubuntu
 MaxAuthTries 3
-MaxSessions 4
+MaxSessions 2
+LogLevel VERBOSE
+Compression no
+TCPKeepAlive no
+Banner /etc/issue.net
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
@@ -37,6 +41,8 @@ Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 HostKeyAlgorithms ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256
 EOF
+echo "Authorized access only. Activity is logged." >/etc/issue.net
+echo "Authorized access only. Activity is logged." >/etc/issue
 sshd -t
 # Open sessions stay; new logins get the new settings.
 systemctl restart ssh.service
@@ -124,6 +130,37 @@ if ! cmp -s /etc/docker/daemon.json.new /etc/docker/daemon.json; then
 else
   rm /etc/docker/daemon.json.new
 fi
+
+# Kernel modules for network protocols and USB storage this VM never uses.
+cat >/etc/modprobe.d/60-mivais-unused.conf <<'EOF'
+install dccp /bin/false
+install sctp /bin/false
+install rds /bin/false
+install tipc /bin/false
+install usb-storage /bin/false
+EOF
+
+# No core dumps (they can hold secrets), and new files closed to other users.
+echo "* hard core 0" >/etc/security/limits.d/60-mivais-nocore.conf
+sed -i 's/^UMASK[[:space:]].*/UMASK\t\t027/' /etc/login.defs
+
+# Audit log of changes to logins, sudo, SSH, Docker and the stack's secrets.
+apt-get install -y -qq auditd libpam-tmpdir >/dev/null
+cat >/etc/audit/rules.d/60-mivais.rules <<'EOF'
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/sudoers -p wa -k sudo
+-w /etc/sudoers.d/ -p wa -k sudo
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+-w /home/ubuntu/.ssh/authorized_keys -p wa -k sshkeys
+-w /etc/docker/ -p wa -k docker
+-w /usr/bin/docker -p x -k docker
+-w /opt/mivais/ -p wa -k mivais
+EOF
+systemctl enable --now auditd >/dev/null 2>&1
+augenrules --load >/dev/null
 
 # Secrets and the checkout are root's only.
 chmod 700 /opt/mivais
