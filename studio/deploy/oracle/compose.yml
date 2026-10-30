@@ -101,6 +101,10 @@ services:
     user: "65532:65532"
     command: ["tunnel", "--no-autoupdate", "run"]
     env_file: /opt/mivais/tunnel.env
+    # SSH goes through the tunnel too (ssh-studio.thanosdrossos.com, behind Cloudflare Access),
+    # to the host's sshd; port 22 is closed to the internet.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       studio:
         condition: service_healthy
