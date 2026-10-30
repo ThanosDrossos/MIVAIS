@@ -186,7 +186,7 @@ export function TaskPage() {
         {isVa ? (
           <div className="va-body">
             <div className={`va-stage ${isFullscreen ? "is-fullscreen" : ""}`} id="va-stage" ref={stageRef}>
-              <iframe className="va-iframe" id="va-iframe" src={data.iframe_url ?? undefined} title="Visual Analytics System" allow="fullscreen" />
+              <iframe className="va-iframe" id="va-iframe" src={data.iframe_url ?? undefined} title="Visual Analytics System" allow="fullscreen; camera" />
             </div>
             <aside className="va-side">
               <div className="va-side-scroll">
