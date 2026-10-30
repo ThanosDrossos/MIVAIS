@@ -1,45 +1,123 @@
 # MIVAIS Studio on the Oracle Cloud VM (Always Free, Ampere A1, arm64): Studio, its MongoDB
 # and the Cloudflare Tunnel that publishes it as https://studio.thanosdrossos.com. Nothing
 # listens on a public port; the tunnel connects outward. deploy.sh builds and starts it.
-# Secrets live on the VM only: /opt/mivais/studio.env (STUDIO_ADMIN_PASSWORD,
-# STUDIO_JWT_SECRET, STUDIO_PUBLIC_BASE_URL) and /opt/mivais/tunnel.env (TUNNEL_TOKEN).
+# Secrets live on the VM only, root-owned with mode 600:
+#   /opt/mivais/studio.env  STUDIO_ADMIN_PASSWORD, STUDIO_JWT_SECRET, STUDIO_PUBLIC_BASE_URL,
+#                           STUDIO_MONGO_URL (with Studio's own database user)
+#   /opt/mivais/mongo.env   MONGO_INITDB_ROOT_USERNAME, MONGO_INITDB_ROOT_PASSWORD,
+#                           STUDIO_DB_PASSWORD (read once by mongo-init.js)
+#   /opt/mivais/tunnel.env  TUNNEL_TOKEN
+# Hardening: every container without Linux capabilities, as a non-root user, on a read-only
+# filesystem with no privilege gain (also set daemon-wide by harden-host.sh). MongoDB sits on
+# an internal network that only Studio reaches, and asks for a password.
 
 name: mivais
 
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+
 services:
   mongo:
+    <<: *hardened
     image: mongo:7.0.43
-    restart: unless-stopped
+    # The image's mongodb user; a new volume takes its ownership from the image.
+    user: "999:999"
+    command: ["mongod", "--auth", "--bind_ip_all", "--wiredTigerCacheSizeGB", "1"]
+    env_file: /opt/mivais/mongo.env
     volumes:
       - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/10-studio-user.js:ro
+    networks:
+      - backend
+    mem_limit: 3g
+    pids_limit: 512
 
-  studio:
-    build:
-      context: ../..
-    restart: unless-stopped
-    depends_on:
-      - mongo
-    env_file: /opt/mivais/studio.env
-    environment:
-      STUDIO_MONGO_URL: mongodb://mongo:27017
-      STUDIO_ENVIRONMENT: production
-      STUDIO_WHISPER_WORKER_ENABLED: "false"
+  # Gives the Studio volumes to Studio's user; runs once per deploy and exits.
+  studio-volumes:
+    # Studio's image, built below; never pulled, since a public image could have this name.
+    image: mivais-studio
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["chown", "-R", "10001:10001", "/app/data", "/app/studies"]
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
     volumes:
       - studio-data:/app/data
       - studio-studies:/app/studies
+
+  studio:
+    <<: *hardened
+    image: mivais-studio
+    pull_policy: build
+    build:
+      context: ../..
+    user: "10001:10001"
+    depends_on:
+      mongo:
+        condition: service_started
+      studio-volumes:
+        condition: service_completed_successfully
+    env_file: /opt/mivais/studio.env
+    environment:
+      STUDIO_ENVIRONMENT: production
+      STUDIO_WHISPER_WORKER_ENABLED: "false"
+      HOME: /tmp
+    volumes:
+      - studio-data:/app/data
+      - studio-studies:/app/studies
+    networks:
+      - backend
+      - edge
     # For checks over SSH (curl localhost:8000/health); the tunnel reaches it as studio:8000.
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 2g
+    pids_limit: 512
 
   cloudflared:
+    <<: *hardened
     image: cloudflare/cloudflared:2026.10.1
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
+    # The image's nonroot user.
+    user: "65532:65532"
+    command: ["tunnel", "--no-autoupdate", "run"]
     env_file: /opt/mivais/tunnel.env
     depends_on:
-      - studio
+      studio:
+        condition: service_healthy
+    networks:
+      - edge
+    mem_limit: 256m
+    pids_limit: 128
+
+networks:
+  # MongoDB's network: no route out, reachable from Studio only.
+  backend:
+    internal: true
+  # Studio and the tunnel, with a route out.
+  edge: {}
 
 volumes:
   mongo-data:
+  mongo-config:
   studio-data:
   studio-studies:
